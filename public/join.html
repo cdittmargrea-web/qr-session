@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Scan Session</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #000;
+      color: #fff;
+      height: 100dvh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Camera fills the screen ── */
+    #video {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #111;
+    }
+
+    /* ── All UI overlays on top ── */
+    #overlay {
+      position: relative;
+      z-index: 10;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    /* ── Top status bar ── */
+    #top-bar {
+      padding: 20px 20px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      pointer-events: all;
+    }
+    #conn-pill {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 500;
+      backdrop-filter: blur(12px);
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      transition: all 0.3s;
+    }
+    #conn-pill.connected { background: rgba(30,80,50,0.8); border-color: rgba(80,200,120,0.4); }
+    #conn-pill.error { background: rgba(100,30,30,0.8); border-color: rgba(200,80,80,0.4); }
+    #conn-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #aaa;
+      transition: background 0.3s;
+    }
+    #conn-pill.connected #conn-dot { background: #50c880; }
+    #conn-pill.error #conn-dot { background: #e07070; }
+
+    /* ── Bottom controls ── */
+    #bottom-bar {
+      padding: 0 20px 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      pointer-events: all;
+    }
+
+    /* ── Countdown ring ── */
+    #countdown-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      opacity: 0;
+      transition: opacity 0.5s;
+    }
+    #countdown-wrap.visible { opacity: 1; }
+    #countdown-ring {
+      position: relative;
+      width: 88px; height: 88px;
+    }
+    #countdown-ring svg {
+      width: 88px; height: 88px;
+      transform: rotate(-90deg);
+    }
+    #ring-track { fill: none; stroke: rgba(255,255,255,0.15); stroke-width: 4; }
+    #ring-fill  {
+      fill: none;
+      stroke: #50c880;
+      stroke-width: 4;
+      stroke-linecap: round;
+      stroke-dasharray: 251;
+      stroke-dashoffset: 251;
+      transition: stroke-dashoffset 1s linear, stroke 0.3s;
+    }
+    #countdown-num {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    #countdown-label {
+      font-size: 12px;
+      color: rgba(255,255,255,0.6);
+      letter-spacing: 1px;
+    }
+
+    /* ── Flash overlay when capturing ── */
+    #flash {
+      position: fixed;
+      inset: 0;
+      background: #fff;
+      z-index: 20;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.1s;
+    }
+
+    /* ── "Uploading" badge ── */
+    #upload-badge {
+      padding: 8px 18px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 500;
+      backdrop-filter: blur(12px);
+      background: rgba(224,160,60,0.85);
+      border: 1px solid rgba(255,200,80,0.3);
+      display: none;
+    }
+    #upload-badge.visible { display: block; }
+
+    /* ── Start camera button ── */
+    #start-btn {
+      padding: 16px 40px;
+      font-size: 17px;
+      font-weight: 600;
+      border-radius: 16px;
+      border: none;
+      background: #4a8cff;
+      color: #fff;
+      cursor: pointer;
+      width: 100%;
+      max-width: 320px;
+      transition: background 0.2s, transform 0.1s;
+    }
+    #start-btn:active { transform: scale(0.97); }
+
+    /* ── Error / info messages ── */
+    #msg-box {
+      display: none;
+      text-align: center;
+      padding: 14px 20px;
+      border-radius: 14px;
+      font-size: 14px;
+      line-height: 1.5;
+      backdrop-filter: blur(12px);
+      background: rgba(180,60,60,0.8);
+      border: 1px solid rgba(255,100,100,0.3);
+      max-width: 320px;
+    }
+    #msg-box.visible { display: block; }
+    #msg-box.info { background: rgba(30,60,100,0.8); border-color: rgba(80,140,255,0.3); }
+
+    /* ── Hidden canvas for frame capture ── */
+    #canvas { display: none; }
+  </style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+<div id="flash"></div>
+
+<div id="overlay">
+  <div id="top-bar">
+    <div id="conn-pill">
+      <span id="conn-dot"></span>
+      <span id="conn-text">Connecting...</span>
+    </div>
+  </div>
+
+  <div id="bottom-bar">
+    <div id="upload-badge">⬆ Uploading frame...</div>
+
+    <div id="countdown-wrap">
+      <div id="countdown-ring">
+        <svg viewBox="0 0 88 88">
+          <circle class="ring-track" cx="44" cy="44" r="40" id="ring-track"/>
+          <circle cx="44" cy="44" r="40" id="ring-fill"/>
+        </svg>
+        <div id="countdown-num">30</div>
+      </div>
+      <div id="countdown-label">NEXT CAPTURE</div>
+    </div>
+
+    <div id="msg-box"></div>
+    <button id="start-btn" onclick="startCamera()">Allow Camera Access</button>
+  </div>
+</div>
+
+<script>
+  const INTERVAL = 30; // seconds between captures
+
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get('session');
+
+  const video       = document.getElementById('video');
+  const canvas      = document.getElementById('canvas');
+  const flash       = document.getElementById('flash');
+  const connPill    = document.getElementById('conn-pill');
+  const connText    = document.getElementById('conn-text');
+  const startBtn    = document.getElementById('start-btn');
+  const countdownWrap = document.getElementById('countdown-wrap');
+  const countdownNum  = document.getElementById('countdown-num');
+  const ringFill    = document.getElementById('ring-fill');
+  const uploadBadge = document.getElementById('upload-badge');
+  const msgBox      = document.getElementById('msg-box');
+
+  const CIRCUMFERENCE = 2 * Math.PI * 40; // ≈ 251.3
+
+  let socket = null;
+  let captureTimer = null;
+  let countdownInterval = null;
+  let secondsLeft = INTERVAL;
+  let joined = false;
+
+  // ── Validate session ID in URL ──
+  if (!sessionId) {
+    showMsg('No session ID in URL. Please scan the QR code on the host screen.', false);
+    startBtn.style.display = 'none';
+  }
+
+  function setConn(state, text) {
+    connPill.className = state;
+    connText.textContent = text;
+  }
+
+  function showMsg(text, isInfo = true) {
+    msgBox.textContent = text;
+    msgBox.className = isInfo ? 'visible info' : 'visible';
+  }
+
+  function flashScreen() {
+    flash.style.opacity = '1';
+    setTimeout(() => { flash.style.opacity = '0'; }, 150);
+  }
+
+  // ── Countdown ring ──
+  function startCountdown() {
+    secondsLeft = INTERVAL;
+    countdownWrap.classList.add('visible');
+    updateRing();
+
+    clearInterval(countdownInterval);
+    countdownInterval = setInterval(() => {
+      secondsLeft--;
+      updateRing();
+      if (secondsLeft <= 0) {
+        clearInterval(countdownInterval);
+      }
+    }, 1000);
+  }
+
+  function updateRing() {
+    const progress = secondsLeft / INTERVAL;
+    const offset = CIRCUMFERENCE * (1 - progress);
+    ringFill.style.strokeDashoffset = offset;
+    ringFill.style.strokeDasharray = CIRCUMFERENCE;
+    countdownNum.textContent = secondsLeft;
+
+    // Colour: green → yellow → red as time runs out
+    if (progress > 0.5) ringFill.style.stroke = '#50c880';
+    else if (progress > 0.2) ringFill.style.stroke = '#e0a040';
+    else ringFill.style.stroke = '#e06060';
+  }
+
+  // ── Capture a frame and send it ──
+  function captureAndSend() {
+    if (!joined) return;
+
+    flashScreen();
+    uploadBadge.classList.add('visible');
+
+    canvas.width  = video.videoWidth  || 1280;
+    canvas.height = video.videoHeight || 720;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const imageData = canvas.toDataURL('image/jpeg', 0.85);
+
+    socket.emit('frame', { sessionId, imageData });
+    console.log('Frame sent, size:', Math.round(imageData.length / 1024), 'KB');
+
+    // Reset badge after a moment
+    setTimeout(() => uploadBadge.classList.remove('visible'), 2000);
+
+    // Restart countdown
+    startCountdown();
+
+    // Schedule next capture
+    captureTimer = setTimeout(captureAndSend, INTERVAL * 1000);
+  }
+
+  // ── Start camera + connect socket ──
+  async function startCamera() {
+    startBtn.disabled = true;
+    startBtn.textContent = 'Requesting camera...';
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' }, // back camera on phones
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+      startBtn.style.display = 'none';
+      msgBox.classList.remove('visible');
+    } catch (err) {
+      startBtn.disabled = false;
+      startBtn.textContent = 'Allow Camera Access';
+      showMsg('Camera access denied. Please allow camera in your browser settings and try again.', false);
+      return;
+    }
+
+    // Now connect to the server
+    connectSocket();
+  }
+
+  function connectSocket() {
+    socket = io();
+
+    socket.on('connect', () => {
+      setConn('', 'Joining session...');
+      socket.emit('join-session', sessionId);
+    });
+
+    socket.on('joined', () => {
+      joined = true;
+      setConn('connected', 'Connected to host');
+      showMsg('📸 Capturing every 30 seconds. Point camera at text to analyse.', true);
+
+      // First capture after 3 seconds (let camera adjust)
+      captureTimer = setTimeout(captureAndSend, 3000);
+    });
+
+    socket.on('join-error', (msg) => {
+      setConn('error', 'Join failed');
+      showMsg(msg, false);
+    });
+
+    socket.on('session-ended', () => {
+      joined = false;
+      clearTimeout(captureTimer);
+      clearInterval(countdownInterval);
+      setConn('error', 'Session ended');
+      countdownWrap.classList.remove('visible');
+      showMsg('The host ended the session.', false);
+    });
+
+    socket.on('disconnect', () => {
+      setConn('error', 'Connection lost');
+      clearTimeout(captureTimer);
+      clearInterval(countdownInterval);
+    });
+
+    socket.on('reconnect', () => {
+      setConn('', 'Reconnected — re-joining...');
+      socket.emit('join-session', sessionId);
+    });
+  }
+</script>
+</body>
+</html>

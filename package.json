@@ -1,0 +1,17 @@
+{
+  "name": "qr-session-app",
+  "version": "1.0.0",
+  "description": "QR-based live camera session with Claude vision",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0",
+    "qrcode": "^1.5.3",
+    "socket.io": "^4.7.0",
+    "uuid": "^9.0.1"
+  }
+}

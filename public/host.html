@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Session Host</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f13;
+      color: #f0f0f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ── Top bar ── */
+    header {
+      width: 100%;
+      padding: 18px 32px;
+      background: #1a1a22;
+      border-bottom: 1px solid #2a2a38;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
+    #status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 500;
+      background: #2a2a38;
+      color: #888;
+      transition: all 0.3s;
+    }
+    #status-pill.waiting  { background: #1e2638; color: #6090d0; }
+    #status-pill.connected { background: #152820; color: #50c880; }
+    #status-pill.processing { background: #2a2010; color: #e0a040; }
+    #status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: currentColor;
+      animation: none;
+    }
+    #status-pill.processing #status-dot { animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* ── Main layout ── */
+    main {
+      width: 100%;
+      max-width: 900px;
+      padding: 40px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 40px;
+      flex: 1;
+    }
+
+    /* ── QR section ── */
+    #qr-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+    #qr-wrap {
+      background: #fff;
+      padding: 20px;
+      border-radius: 20px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+    #qr-wrap img { display: block; width: 260px; height: 260px; }
+    #qr-placeholder {
+      width: 260px; height: 260px;
+      background: #1a1a22;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #444;
+      font-size: 14px;
+    }
+    #session-id {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 8px;
+      color: #fff;
+    }
+    #qr-hint { font-size: 14px; color: #666; text-align: center; }
+
+    /* ── Hidden once connected ── */
+    #qr-section.hidden { display: none; }
+
+    /* ── Response area ── */
+    #response-section {
+      width: 100%;
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #response-section.visible { display: flex; }
+
+    #response-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #response-header h2 { font-size: 16px; font-weight: 600; color: #aaa; }
+    #response-timestamp { font-size: 12px; color: #555; }
+
+    #response-box {
+      background: #1a1a22;
+      border: 1px solid #2a2a38;
+      border-radius: 16px;
+      padding: 28px;
+      font-size: 18px;
+      line-height: 1.7;
+      color: #eee;
+      min-height: 120px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Highlight the text-found and response sections */
+    #response-box .label-text { color: #6090d0; font-weight: 600; }
+    #response-box .label-response { color: #50c880; font-weight: 600; }
+
+    /* ── Thinking spinner ── */
+    #thinking {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 32px;
+      color: #e0a040;
+      font-size: 15px;
+    }
+    #thinking.visible { display: flex; }
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid #2a2a38;
+      border-top-color: #e0a040;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Phone status bar (shown once connected) ── */
+    #phone-bar {
+      display: none;
+      width: 100%;
+      background: #152820;
+      border: 1px solid #1e4030;
+      border-radius: 12px;
+      padding: 14px 20px;
+      font-size: 14px;
+      color: #50c880;
+      align-items: center;
+      gap: 10px;
+    }
+    #phone-bar.visible { display: flex; }
+    #phone-bar.disconnected { background: #2a1a1a; border-color: #4a2020; color: #d07070; }
+
+    /* ── Error box ── */
+    #error-box {
+      display: none;
+      width: 100%;
+      background: #2a1a1a;
+      border: 1px solid #5a2020;
+      border-radius: 12px;
+      padding: 16px 20px;
+      font-size: 14px;
+      color: #e07070;
+    }
+    #error-box.visible { display: block; }
+
+    /* ── New session button ── */
+    #new-session-btn {
+      display: none;
+      margin-top: 16px;
+      padding: 12px 28px;
+      background: #3a3a50;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #new-session-btn:hover { background: #4a4a68; }
+    #new-session-btn.visible { display: inline-block; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📡 Session Host</h1>
+  <div id="status-pill" class="waiting">
+    <span id="status-dot"></span>
+    <span id="status-text">Waiting for phone...</span>
+  </div>
+</header>
+
+<main>
+  <!-- QR Code -->
+  <div id="qr-section">
+    <div id="qr-wrap">
+      <div id="qr-placeholder">Generating...</div>
+      <img id="qr-img" style="display:none" alt="QR Code" />
+    </div>
+    <div id="session-id">——</div>
+    <div id="qr-hint">Scan this code with your phone to connect</div>
+  </div>
+
+  <!-- Phone connection bar -->
+  <div id="phone-bar">
+    <span>📱</span>
+    <span id="phone-status-text">Phone connected — capturing every 30 seconds</span>
+  </div>
+
+  <!-- Thinking -->
+  <div id="thinking">
+    <div class="spinner"></div>
+    Analysing image with Claude...
+  </div>
+
+  <!-- Response -->
+  <div id="response-section">
+    <div id="response-header">
+      <h2>Claude's Response</h2>
+      <span id="response-timestamp"></span>
+    </div>
+    <div id="response-box"></div>
+  </div>
+
+  <!-- Error -->
+  <div id="error-box"></div>
+
+  <!-- Restart -->
+  <button id="new-session-btn" onclick="location.reload()">Start New Session</button>
+</main>
+
+<script>
+  const socket = io();
+  const baseUrl = window.location.origin;
+
+  const qrSection   = document.getElementById('qr-section');
+  const qrImg       = document.getElementById('qr-img');
+  const qrPlaceholder = document.getElementById('qr-placeholder');
+  const sessionIdEl = document.getElementById('session-id');
+  const statusPill  = document.getElementById('status-pill');
+  const statusText  = document.getElementById('status-text');
+  const phoneBar    = document.getElementById('phone-bar');
+  const phoneStatusText = document.getElementById('phone-status-text');
+  const thinking    = document.getElementById('thinking');
+  const responseSection = document.getElementById('response-section');
+  const responseBox  = document.getElementById('response-box');
+  const responseTimestamp = document.getElementById('response-timestamp');
+  const errorBox    = document.getElementById('error-box');
+  const newSessionBtn = document.getElementById('new-session-btn');
+
+  function setStatus(state, text) {
+    statusPill.className = state;
+    statusText.textContent = text;
+  }
+
+  // Ask server to create a session immediately
+  socket.emit('create-session', baseUrl);
+
+  socket.on('session-created', ({ sessionId, qrDataUrl }) => {
+    sessionIdEl.textContent = sessionId;
+    qrPlaceholder.style.display = 'none';
+    qrImg.src = qrDataUrl;
+    qrImg.style.display = 'block';
+    setStatus('waiting', 'Waiting for phone...');
+  });
+
+  socket.on('phone-connected', () => {
+    qrSection.classList.add('hidden');
+    phoneBar.classList.add('visible');
+    phoneBar.classList.remove('disconnected');
+    phoneStatusText.textContent = 'Phone connected — capturing every 30 seconds';
+    setStatus('connected', 'Phone connected');
+    errorBox.classList.remove('visible');
+  });
+
+  socket.on('phone-disconnected', () => {
+    phoneBar.classList.add('disconnected');
+    phoneStatusText.textContent = 'Phone disconnected — scan the QR code again';
+    setStatus('waiting', 'Waiting for phone...');
+    qrSection.classList.remove('hidden');
+  });
+
+  socket.on('processing', (isProcessing) => {
+    if (isProcessing) {
+      thinking.classList.add('visible');
+      setStatus('processing', 'Analysing...');
+    } else {
+      thinking.classList.remove('visible');
+      setStatus('connected', 'Phone connected');
+    }
+  });
+
+  socket.on('llm-response', ({ text, timestamp }) => {
+    responseSection.classList.add('visible');
+    responseTimestamp.textContent = timestamp;
+    errorBox.classList.remove('visible');
+
+    // Colour the emoji labels
+    const coloured = text
+      .replace(/(📝 TEXT FOUND:)/g, '<span class="label-text">$1</span>')
+      .replace(/(💬 RESPONSE:)/g, '<span class="label-response">$1</span>');
+    responseBox.innerHTML = coloured;
+  });
+
+  socket.on('llm-error', (msg) => {
+    thinking.classList.remove('visible');
+    errorBox.classList.add('visible');
+    errorBox.textContent = '⚠️ ' + msg;
+  });
+
+  socket.on('session-ended', () => {
+    setStatus('', 'Session ended');
+    newSessionBtn.classList.add('visible');
+  });
+
+  socket.on('disconnect', () => {
+    setStatus('', 'Connection lost — refresh to reconnect');
+  });
+</script>
+</body>
+</html>
