@@ -311,14 +311,17 @@
 
   socket.on('llm-response', ({ text, timestamp }) => {
     responseSection.classList.add('visible');
-    responseTimestamp.textContent = timestamp;
     errorBox.classList.remove('visible');
 
-    // Colour the emoji labels
     const coloured = text
       .replace(/(📝 TEXT FOUND:)/g, '<span class="label-text">$1</span>')
       .replace(/(💬 RESPONSE:)/g, '<span class="label-response">$1</span>');
-    responseBox.innerHTML = coloured;
+    
+    const entry = document.createElement('div');
+    entry.style.cssText = 'border-bottom: 1px solid #2a2a38; padding-bottom: 24px; margin-bottom: 24px;';
+    entry.innerHTML = `<div style="font-size:12px;color:#555;margin-bottom:8px;">${timestamp}</div>${coloured}`;
+    
+    responseBox.prepend(entry);
   });
 
   socket.on('llm-error', (msg) => {
